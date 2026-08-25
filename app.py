@@ -26,7 +26,7 @@ def load_data():
   client = gspread.authorize(creds)
 
   # Open your Google Sheet by its exact title name (update if you named it differently)
-  sheet = client.open("Sales Master Tracker").worksheet("Appointments")
+  sheet = client.open("SYComms Sales Tracker Sheet").worksheet("Appointments")
 
   data = sheet.get_all_records()
   df = pd.DataFrame(data)

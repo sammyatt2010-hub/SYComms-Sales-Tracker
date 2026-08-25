@@ -57,7 +57,7 @@ if not df.empty:
 # --- Sidebar Controls & Filters ---
 st.sidebar.header("🔍 Filters & Timeframes")
 
-# 1. Timeframe Selector (Defaults to "Specific Month")
+# 1. Timeframe Selector (Defaults to Current Month)
 timeframe_options = [
     "Specific Month",
     "Month-to-Date (MTD)",
@@ -88,7 +88,6 @@ elif timeframe_option == "Specific Month":
   else:
     month_str_options = [current_date.strftime("%B %Y")]
 
-  # Automatically default to the current month if it exists in the list, otherwise default to the first available option
   current_month_str = current_date.strftime("%B %Y")
   default_index = (
       month_str_options.index(current_month_str)
@@ -150,14 +149,20 @@ if selected_rep != "All":
 if selected_status != "All":
   filtered_df = filtered_df[filtered_df["Status"] == selected_status]
 
-# --- Top-Line Financial KPIs ---
+# --- Top-Line Financial KPIs (Refined) ---
 total_pipeline = filtered_df["Potential Value (£)"].sum()
+
 sold_val = filtered_df[filtered_df["Status"].str.lower() == "sold"][
     "Potential Value (£)"
 ].sum()
-sat_val = filtered_df[filtered_df["Status"].str.contains("Sat", case=False, na=False)][
-    "Potential Value (£)"
-].sum()
+
+# To Be Sat / Active Pipeline (Booked, Pending, or future/un-closed statuses)
+to_be_sat_val = filtered_df[
+    filtered_df["Status"]
+    .str.lower()
+    .isin(["booked", "pending", "not sat", ""])
+]["Potential Value (£)"].sum()
+
 lost_val = filtered_df[
     filtered_df["Status"]
     .str.lower()
@@ -168,9 +173,9 @@ total_closed = sold_val + lost_val
 win_rate = (sold_val / total_closed * 100) if total_closed > 0 else 0.0
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Filtered Pipeline", f"£{total_pipeline:,.2f}")
-col2.metric("Revenue Won (Sold)", f"£{sold_val:,.2f}")
-col3.metric("Attended / Sat", f"£{sat_val:,.2f}")
+col1.metric("Total Filtered Pipeline", f"£{total_pipeline:,.2f}")
+col2.metric("Upcoming / To Be Sat", f"£{to_be_sat_val:,.2f}")
+col3.metric("Revenue Won (Sold)", f"£{sold_val:,.2f}")
 col4.metric("Lost Value", f"£{lost_val:,.2f}")
 col5.metric("Win Rate", f"{win_rate:.1f}%")
 
@@ -246,6 +251,7 @@ with tab3:
       "Sold": "#28a745",  # Green
       "Sat": "#17a2b8",  # Teal
       "Booked": "#ffc107",  # Yellow/Orange
+      "Not Sat": "#ffc107",  # Yellow/Orange
       "Not Sold": "#dc3545",  # Red
       "Lost": "#dc3545",  # Red
   }

@@ -63,7 +63,6 @@ timeframe_option = st.sidebar.selectbox(
     ["All Time", "Month-to-Date (MTD)", "Specific Month", "Quarterly", "Yearly"],
 )
 
-# Dynamic time filters based on selection
 current_date = datetime.now()
 time_filtered_df = df.copy()
 
@@ -74,16 +73,13 @@ if timeframe_option == "Month-to-Date (MTD)":
       & (time_filtered_df["Parsed Date"] <= pd.Timestamp(current_date))
   ]
 elif timeframe_option == "Specific Month":
-  # Generate a list of available years/months from data or current year
-  available_months = (
-      df["Parsed Date"]
-      .dropna()
-      .dt.to_period("M")
-      .unique()
-      .sort_values(ascending=False)
-  )
-  month_str_options = [m.strftime("%B %Y") for m in available_months]
-  if not month_str_options:
+  valid_dates = df["Parsed Date"].dropna()
+  if not valid_dates.empty:
+    available_months = (
+        valid_dates.dt.to_period("M").drop_duplicates().sort_values(ascending=False)
+    )
+    month_str_options = [m.to_timestamp().strftime("%B %Y") for m in available_months]
+  else:
     month_str_options = [current_date.strftime("%B %Y")]
 
   selected_month_str = st.sidebar.selectbox(
@@ -148,8 +144,6 @@ sold_val = filtered_df[filtered_df["Status"].str.lower() == "sold"][
 sat_val = filtered_df[filtered_df["Status"].str.contains("Sat", case=False, na=False)][
     "Potential Value (£)"
 ].sum()
-
-# Catch both "Lost" and "Not Sold" variations for the lost value metric
 lost_val = filtered_df[
     filtered_df["Status"]
     .str.lower()
@@ -160,10 +154,10 @@ total_closed = sold_val + lost_val
 win_rate = (sold_val / total_closed * 100) if total_closed > 0 else 0.0
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Filtered Pipeline", f"£{total_pipeline:,.0f}")
-col2.metric("Revenue Won (Sold)", f"£{sold_val:,.0f}")
-col3.metric("Attended / Sat", f"£{sat_val:,.0f}")
-col4.metric("Lost Value", f"£{lost_val:,.0f}")
+col1.metric("Filtered Pipeline", f"£{total_pipeline:,.2f}")
+col2.metric("Revenue Won (Sold)", f"£{sold_val:,.2f}")
+col3.metric("Attended / Sat", f"£{sat_val:,.2f}")
+col4.metric("Lost Value", f"£{lost_val:,.2f}")
 col5.metric("Win Rate", f"{win_rate:.1f}%")
 
 st.divider()
@@ -180,7 +174,12 @@ with tab1:
   if filtered_df.empty:
     st.info("No records found matching your selected timeframe and filters.")
   else:
-    display_df = filtered_df.sort_values(by="Parsed Date", ascending=True)
+    display_df = filtered_df.sort_values(by="Parsed Date", ascending=True).copy()
+    # Format monetary values for display in the table
+    display_df["Potential Value (£)"] = display_df[
+        "Potential Value (£)"
+    ].apply(lambda x: f"£{x:,.2f}")
+
     st.dataframe(
         display_df[[
             "Appointment Date",
@@ -212,10 +211,23 @@ with tab2:
         )
         .reset_index()
     )
+    # Format leaderboard currency columns
+    rep_summary["Pipeline_Value"] = rep_summary["Pipeline_Value"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
+    rep_summary["Won_Value"] = rep_summary["Won_Value"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
+
     st.dataframe(rep_summary, use_container_width=True, hide_index=True)
   else:
     st.info("Insufficient data for leaderboard metrics in this timeframe.")
 
 with tab3:
   st.subheader("Raw Data Inspector")
-  st.dataframe(df, use_container_width=True)
+  raw_display = df.copy()
+  if "Potential Value (£)" in raw_display.columns:
+    raw_display["Potential Value (£)"] = raw_display[
+        "Potential Value (£)"
+    ].apply(lambda x: f"£{x:,.2f}")
+  st.dataframe(raw_display, use_container_width=True)

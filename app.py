@@ -224,7 +224,7 @@ with tab2:
   else:
     st.info("Insufficient data for leaderboard metrics in this timeframe.")
 
-with tab4:  # (Calendar View)
+with tab3:
   st.subheader("🗓️ Visual Team Diary")
 
   calendar_events = []
@@ -270,7 +270,7 @@ with tab4:  # (Calendar View)
         " requirements.txt file."
     )
 
-with tab3:
+with tab4:
   st.subheader("Raw Data Inspector")
   raw_display = df.copy()
   if "Potential Value (£)" in raw_display.columns:

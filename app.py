@@ -46,7 +46,7 @@ if not df.empty:
         errors="coerce",
     ).fillna(0)
 
-  # Standardize date parsing (handles both YYYY-MM-DD and DD/MM/YYYY)
+  # Standardize date parsing (handles DD/MM/YYYY)
   if "Appointment Date" in df.columns:
     df["Parsed Date"] = pd.to_datetime(
         df["Appointment Date"], errors="coerce", dayfirst=True
@@ -54,17 +54,87 @@ if not df.empty:
   else:
     df["Parsed Date"] = pd.NaT
 
-# --- Sidebar Filters ---
-st.sidebar.header("🔍 Filter Controls")
-rep_options = ["All"] + list(df["Sales Rep"].unique()) if not df.empty else ["All"]
+# --- Sidebar Controls & Filters ---
+st.sidebar.header("🔍 Filters & Timeframes")
+
+# 1. Timeframe Selector
+timeframe_option = st.sidebar.selectbox(
+    "Select Timeframe View",
+    ["All Time", "Month-to-Date (MTD)", "Specific Month", "Quarterly", "Yearly"],
+)
+
+# Dynamic time filters based on selection
+current_date = datetime.now()
+time_filtered_df = df.copy()
+
+if timeframe_option == "Month-to-Date (MTD)":
+  time_filtered_df = time_filtered_df[
+      (time_filtered_df["Parsed Date"].dt.year == current_date.year)
+      & (time_filtered_df["Parsed Date"].dt.month == current_date.month)
+      & (time_filtered_df["Parsed Date"] <= pd.Timestamp(current_date))
+  ]
+elif timeframe_option == "Specific Month":
+  # Generate a list of available years/months from data or current year
+  available_months = (
+      df["Parsed Date"]
+      .dropna()
+      .dt.to_period("M")
+      .unique()
+      .sort_values(ascending=False)
+  )
+  month_str_options = [m.strftime("%B %Y") for m in available_months]
+  if not month_str_options:
+    month_str_options = [current_date.strftime("%B %Y")]
+
+  selected_month_str = st.sidebar.selectbox(
+      "Choose Month", month_str_options
+  )
+  chosen_period = pd.to_datetime(selected_month_str, format="%B %Y")
+
+  time_filtered_df = time_filtered_df[
+      (time_filtered_df["Parsed Date"].dt.year == chosen_period.year)
+      & (time_filtered_df["Parsed Date"].dt.month == chosen_period.month)
+  ]
+elif timeframe_option == "Quarterly":
+  current_quarter = (current_date.month - 1) // 3 + 1
+  selected_q = st.sidebar.selectbox(
+      "Select Quarter", [1, 2, 3, 4], index=current_quarter - 1
+  )
+  selected_year = st.sidebar.selectbox(
+      "Select Year",
+      [current_date.year, current_date.year - 1, current_date.year - 2],
+  )
+  time_filtered_df = time_filtered_df[
+      (time_filtered_df["Parsed Date"].dt.year == selected_year)
+      & (time_filtered_df["Parsed Date"].dt.quarter == selected_q)
+  ]
+elif timeframe_option == "Yearly":
+  selected_year = st.sidebar.selectbox(
+      "Select Year",
+      [current_date.year, current_date.year - 1, current_date.year - 2],
+  )
+  time_filtered_df = time_filtered_df[
+      time_filtered_df["Parsed Date"].dt.year == selected_year
+  ]
+
+st.sidebar.divider()
+
+# 2. Consultant & Status Dropdown Filters
+rep_options = (
+    ["All"] + list(time_filtered_df["Sales Rep"].unique())
+    if not time_filtered_df.empty
+    else ["All"]
+)
 status_options = (
-    ["All"] + list(df["Status"].unique()) if not df.empty else ["All"]
+    ["All"] + list(time_filtered_df["Status"].unique())
+    if not time_filtered_df.empty
+    else ["All"]
 )
 
 selected_rep = st.sidebar.selectbox("Filter by Consultant", rep_options)
 selected_status = st.sidebar.selectbox("Filter by Status", status_options)
 
-filtered_df = df.copy()
+filtered_df = time_filtered_df.copy()
 if selected_rep != "All":
   filtered_df = filtered_df[filtered_df["Sales Rep"] == selected_rep]
 if selected_status != "All":
@@ -75,21 +145,22 @@ total_pipeline = filtered_df["Potential Value (£)"].sum()
 sold_val = filtered_df[filtered_df["Status"].str.lower() == "sold"][
     "Potential Value (£)"
 ].sum()
-
-# Catch variations like Sat, Not Sat, Booked, Lost
 sat_val = filtered_df[filtered_df["Status"].str.contains("Sat", case=False, na=False)][
     "Potential Value (£)"
 ].sum()
-lost_val = filtered_df[filtered_df["Status"].str.lower() == "lost"][
-    "Potential Value (£)"
-].sum()
 
-# Calculate conversion rate if possible
+# Catch both "Lost" and "Not Sold" variations for the lost value metric
+lost_val = filtered_df[
+    filtered_df["Status"]
+    .str.lower()
+    .isin(["lost", "not sold", "unsold", "unsuccessful"])
+]["Potential Value (£)"].sum()
+
 total_closed = sold_val + lost_val
 win_rate = (sold_val / total_closed * 100) if total_closed > 0 else 0.0
 
 col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total Pipeline", f"£{total_pipeline:,.0f}")
+col1.metric("Filtered Pipeline", f"£{total_pipeline:,.0f}")
 col2.metric("Revenue Won (Sold)", f"£{sold_val:,.0f}")
 col3.metric("Attended / Sat", f"£{sat_val:,.0f}")
 col4.metric("Lost Value", f"£{lost_val:,.0f}")
@@ -103,14 +174,13 @@ tab1, tab2, tab3 = st.tabs(
 )
 
 with tab1:
-  st.subheader("Active Sales Pipeline & Appointments")
+  st.subheader(
+      f"Active Sales Pipeline & Appointments ({timeframe_option})"
+  )
   if filtered_df.empty:
-    st.info("No records found matching your filters.")
+    st.info("No records found matching your selected timeframe and filters.")
   else:
-    # Sort by date
     display_df = filtered_df.sort_values(by="Parsed Date", ascending=True)
-
-    # Style presentation columns
     st.dataframe(
         display_df[[
             "Appointment Date",
@@ -125,27 +195,26 @@ with tab1:
     )
 
 with tab2:
-  st.subheader("Consultant Performance Breakdown")
-  if not df.empty:
-    # Group by Rep for leaderboards
+  st.subheader(f"Consultant Performance Breakdown ({timeframe_option})")
+  if not time_filtered_df.empty:
     rep_summary = (
-        df.groupby("Sales Rep")
+        time_filtered_df.groupby("Sales Rep")
         .agg(
             Total_Appointments=("Client Name", "count"),
             Pipeline_Value=("Potential Value (£)", "sum"),
             Won_Value=(
                 "Potential Value (£)",
                 lambda x: x[
-                    df.loc[x.index, "Status"].str.lower() == "sold"
+                    time_filtered_df.loc[x.index, "Status"].str.lower()
+                    == "sold"
                 ].sum(),
             ),
         )
         .reset_index()
     )
-
     st.dataframe(rep_summary, use_container_width=True, hide_index=True)
   else:
-    st.info("Insufficient data for leaderboard metrics.")
+    st.info("Insufficient data for leaderboard metrics in this timeframe.")
 
 with tab3:
   st.subheader("Raw Data Inspector")

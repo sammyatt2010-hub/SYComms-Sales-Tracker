@@ -57,10 +57,16 @@ if not df.empty:
 # --- Sidebar Controls & Filters ---
 st.sidebar.header("🔍 Filters & Timeframes")
 
-# 1. Timeframe Selector
+# 1. Timeframe Selector (Defaults to "Specific Month")
+timeframe_options = [
+    "Specific Month",
+    "Month-to-Date (MTD)",
+    "Quarterly",
+    "Yearly",
+    "All Time",
+]
 timeframe_option = st.sidebar.selectbox(
-    "Select Timeframe View",
-    ["All Time", "Month-to-Date (MTD)", "Specific Month", "Quarterly", "Yearly"],
+    "Select Timeframe View", timeframe_options, index=0
 )
 
 current_date = datetime.now()
@@ -82,8 +88,16 @@ elif timeframe_option == "Specific Month":
   else:
     month_str_options = [current_date.strftime("%B %Y")]
 
+  # Automatically default to the current month if it exists in the list, otherwise default to the first available option
+  current_month_str = current_date.strftime("%B %Y")
+  default_index = (
+      month_str_options.index(current_month_str)
+      if current_month_str in month_str_options
+      else 0
+  )
+
   selected_month_str = st.sidebar.selectbox(
-      "Choose Month", month_str_options
+      "Choose Month", month_str_options, index=default_index
   )
   chosen_period = pd.to_datetime(selected_month_str, format="%B %Y")
 

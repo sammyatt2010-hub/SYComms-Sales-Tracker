@@ -40,11 +40,25 @@ except Exception as e:
 # --- Data Cleaning & Prep ---
 if not df.empty:
   # Clean numerical values
-  if "Potential Value (£)" in df.columns:
-    df["Potential Value (£)"] = pd.to_numeric(
-        df["Potential Value (£)"].astype(str).str.replace(r"[^\d.]", "", regex=True),
-        errors="coerce",
-    ).fillna(0)
+  for col in [
+      "Lease Value (£)",
+      "Services Value (£)",
+      "Combined Value (£)",
+  ]:
+    if col in df.columns:
+      df[col] = pd.to_numeric(
+          df[col].astype(str).str.replace(r"[^\d.]", "", regex=True),
+          errors="coerce",
+      ).fillna(0)
+    else:
+      df[col] = 0.0
+
+  # If Combined Value is empty/0 but Lease or Services have values, auto-calculate it
+  df["Total Value (£)"] = df["Combined Value (£)"]
+  mask = df["Total Value (£)"] == 0
+  df.loc[mask, "Total Value (£)"] = (
+      df.loc[mask, "Lease Value (£)"] + df.loc[mask, "Services Value (£)"]
+  )
 
   # Standardize date parsing (handles DD/MM/YYYY)
   if "Appointment Date" in df.columns:
@@ -149,35 +163,38 @@ if selected_rep != "All":
 if selected_status != "All":
   filtered_df = filtered_df[filtered_df["Status"] == selected_status]
 
-# --- Top-Line Financial KPIs (Refined) ---
-total_pipeline = filtered_df["Potential Value (£)"].sum()
+# --- Top-Line Financial KPIs ---
+total_pipeline = filtered_df["Total Value (£)"].sum()
+total_lease = filtered_df["Lease Value (£)"].sum()
+total_services = filtered_df["Services Value (£)"].sum()
 
 sold_val = filtered_df[filtered_df["Status"].str.lower() == "sold"][
-    "Potential Value (£)"
+    "Total Value (£)"
 ].sum()
-
-# To Be Sat / Active Pipeline (Booked, Pending, or future/un-closed statuses)
 to_be_sat_val = filtered_df[
     filtered_df["Status"]
     .str.lower()
-    .isin(["booked", "pending", "not sat", ""])
-]["Potential Value (£)"].sum()
-
+    .isin(["booked", "pending", "meeting booked", "not sat", ""])
+]["Total Value (£)"].sum()
 lost_val = filtered_df[
     filtered_df["Status"]
     .str.lower()
-    .isin(["lost", "not sold", "unsold", "unsuccessful"])
-]["Potential Value (£)"].sum()
+    .isin(["lost", "not sold", "closed lost", "unsold", "unsuccessful"])
+]["Total Value (£)"].sum()
 
 total_closed = sold_val + lost_val
 win_rate = (sold_val / total_closed * 100) if total_closed > 0 else 0.0
 
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total Filtered Pipeline", f"£{total_pipeline:,.2f}")
-col2.metric("Upcoming / To Be Sat", f"£{to_be_sat_val:,.2f}")
-col3.metric("Revenue Won (Sold)", f"£{sold_val:,.2f}")
-col4.metric("Lost Value", f"£{lost_val:,.2f}")
-col5.metric("Win Rate", f"{win_rate:.1f}%")
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Pipeline (Combined)", f"£{total_pipeline:,.2f}")
+col2.metric("Total Lease Value", f"£{total_lease:,.2f}")
+col3.metric("Total Services Value", f"£{total_services:,.2f}")
+
+col4, col5, col6, col7 = st.columns(4)
+col4.metric("Upcoming / Booked", f"£{to_be_sat_val:,.2f}")
+col5.metric("Revenue Won (Sold)", f"£{sold_val:,.2f}")
+col6.metric("Lost Value", f"£{lost_val:,.2f}")
+col7.metric("Win Rate", f"{win_rate:.1f}%")
 
 st.divider()
 
@@ -197,16 +214,24 @@ with tab1:
     st.info("No records found matching your selected timeframe and filters.")
   else:
     display_df = filtered_df.sort_values(by="Parsed Date", ascending=True).copy()
-    display_df["Potential Value (£)"] = display_df[
-        "Potential Value (£)"
-    ].apply(lambda x: f"£{x:,.2f}")
+    display_df["Lease Value (£)"] = display_df["Lease Value (£)"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
+    display_df["Services Value (£)"] = display_df["Services Value (£)"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
+    display_df["Combined Value (£)"] = display_df["Combined Value (£)"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
 
     st.dataframe(
         display_df[[
             "Appointment Date",
             "Client Name",
             "Sales Rep",
-            "Potential Value (£)",
+            "Lease Value (£)",
+            "Services Value (£)",
+            "Combined Value (£)",
             "Status",
             "Notes",
         ]],
@@ -220,10 +245,12 @@ with tab2:
     rep_summary = (
         time_filtered_df.groupby("Sales Rep")
         .agg(
-            Total_Appointments=("Client Name", "count"),
-            Pipeline_Value=("Potential Value (£)", "sum"),
+            Total_Deals=("Client Name", "count"),
+            Lease_Total=("Lease Value (£)", "sum"),
+            Services_Total=("Services Value (£)", "sum"),
+            Combined_Pipeline=("Total Value (£)", "sum"),
             Won_Value=(
-                "Potential Value (£)",
+                "Total Value (£)",
                 lambda x: x[
                     time_filtered_df.loc[x.index, "Status"].str.lower()
                     == "sold"
@@ -232,7 +259,13 @@ with tab2:
         )
         .reset_index()
     )
-    rep_summary["Pipeline_Value"] = rep_summary["Pipeline_Value"].apply(
+    rep_summary["Lease_Total"] = rep_summary["Lease_Total"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
+    rep_summary["Services_Total"] = rep_summary["Services_Total"].apply(
+        lambda x: f"£{x:,.2f}"
+    )
+    rep_summary["Combined_Pipeline"] = rep_summary["Combined_Pipeline"].apply(
         lambda x: f"£{x:,.2f}"
     )
     rep_summary["Won_Value"] = rep_summary["Won_Value"].apply(
@@ -249,10 +282,12 @@ with tab3:
   calendar_events = []
   status_colors = {
       "Sold": "#28a745",  # Green
+      "Closed Won": "#28a745",  # Green
       "Sat": "#17a2b8",  # Teal
       "Booked": "#ffc107",  # Yellow/Orange
-      "Not Sat": "#ffc107",  # Yellow/Orange
+      "Meeting Booked": "#ffc107",  # Yellow/Orange
       "Not Sold": "#dc3545",  # Red
+      "Closed Lost": "#dc3545",  # Red
       "Lost": "#dc3545",  # Red
   }
 
@@ -260,7 +295,7 @@ with tab3:
     if pd.notna(row["Parsed Date"]):
       status_str = str(row["Status"])
       color = status_colors.get(status_str, "#6c757d")
-      val_formatted = f"£{row['Potential Value (£)']:,.0f}"
+      val_formatted = f"£{row['Total Value (£)']:,.0f}"
 
       calendar_events.append({
           "title": f"{row['Client Name']} ({val_formatted}) - {status_str} [{row['Sales Rep']}]",
@@ -283,18 +318,19 @@ with tab3:
   try:
     from streamlit_calendar import calendar
 
-    calendar(events=calendar_events, options=calendar_options)
+    calendar(events=calendar_events, options=calendar_events and calendar_options)
   except ImportError:
-    st.warning(
-        "Please make sure `streamlit-calendar` is included in your"
-        " requirements.txt file."
-    )
+    st.warning("Please include `streamlit-calendar` in your requirements.txt.")
 
 with tab4:
   st.subheader("Raw Data Inspector")
   raw_display = df.copy()
-  if "Potential Value (£)" in raw_display.columns:
-    raw_display["Potential Value (£)"] = raw_display[
-        "Potential Value (£)"
-    ].apply(lambda x: f"£{x:,.2f}")
+  for col in [
+      "Lease Value (£)",
+      "Services Value (£)",
+      "Combined Value (£)",
+      "Total Value (£)",
+  ]:
+    if col in raw_display.columns:
+      raw_display[col] = raw_display[col].apply(lambda x: f"£{x:,.2f}")
   st.dataframe(raw_display, use_container_width=True)

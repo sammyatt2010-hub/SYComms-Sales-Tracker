@@ -63,7 +63,7 @@ if not df.empty:
         else:
             df[col] = 0.0
 
-    # If Combined Value is empty/0 but Lease or Services have values, auto-calculate it
+    # Auto-calculate Total Value if needed
     df["Total Value (£)"] = df["Combined Value (£)"]
     mask = df["Total Value (£)"] == 0
     df.loc[mask, "Total Value (£)"] = (
@@ -81,7 +81,7 @@ if not df.empty:
 # --- Sidebar Controls & Filters ---
 st.sidebar.header("🔍 Filters & Timeframes")
 
-# 1. Timeframe Selector (Defaults to Current Month)
+# 1. Timeframe Selector
 timeframe_options = [
     "Specific Month",
     "Month-to-Date (MTD)",
@@ -173,38 +173,40 @@ if selected_rep != "All":
 if selected_status != "All":
     filtered_df = filtered_df[filtered_df["Status"] == selected_status]
 
-# --- Top-Line Financial KPIs ---
-total_pipeline = filtered_df["Total Value (£)"].sum()
-total_lease = filtered_df["Lease Value (£)"].sum()
-total_services = filtered_df["Services Value (£)"].sum()
+st.sidebar.divider()
+show_financials = st.sidebar.checkbox(
+    "📊 Show Pipeline Financials (Beta)", value=False
+)
 
-sold_val = filtered_df[filtered_df["Status"].str.lower() == "sold"][
-    "Total Value (£)"
-].sum()
-to_be_sat_val = filtered_df[
-    filtered_df["Status"]
-    .str.lower()
-    .isin(["booked", "pending", "meeting booked", "not sat", ""])
-]["Total Value (£)"].sum()
-lost_val = filtered_df[
-    filtered_df["Status"]
-    .str.lower()
-    .isin(["lost", "not sold", "closed lost", "unsold", "unsuccessful"])
-]["Total Value (£)"].sum()
+# --- Top-Line Volume & Health KPIs ---
+total_deals_count = len(filtered_df)
 
-total_closed = sold_val + lost_val
-win_rate = (sold_val / total_closed * 100) if total_closed > 0 else 0.0
+# Grouping stage counts flexibly
+def count_stages(stages):
+    if filtered_df.empty or "Status" not in filtered_df.columns:
+        return 0
+    return len(filtered_df[filtered_df["Status"].str.lower().isin([s.lower() for s in stages])])
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Pipeline (Combined)", f"£{total_pipeline:,.2f}")
-col2.metric("Total Lease Value", f"£{total_lease:,.2f}")
-col3.metric("Total Services Value", f"£{total_services:,.2f}")
+early_stages_count = count_stages(["Meeting Booked", "Booked", "2nd Dem", "Pending"])
+active_closing_count = count_stages(["Create Proposal", "Send for Signature", "Negotiations", "On-Hold"])
+won_count = count_stages(["Sold", "Closed Won"])
+lost_count = count_stages(["Closed Lost", "Not Sold", "Lost", "Unsuccessful"])
 
-col4, col5, col6, col7 = st.columns(4)
-col4.metric("Upcoming / Booked", f"£{to_be_sat_val:,.2f}")
-col5.metric("Revenue Won (Sold)", f"£{sold_val:,.2f}")
-col6.metric("Lost Value", f"£{lost_val:,.2f}")
-col7.metric("Win Rate", f"{win_rate:.1f}%")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Active Deals", f"{total_deals_count}")
+col2.metric("Early Appointments", f"{early_stages_count}")
+col3.metric("In Progress / Closing", f"{active_closing_count}")
+col4.metric("Won / Closed", f"{won_count} Won ({lost_count} Lost)")
+
+# Optional Financial KPIs if toggled on
+if show_financials:
+    st.markdown("### 💰 Financial Overview")
+    total_pipeline = filtered_df["Total Value (£)"].sum()
+    sold_val = filtered_df[filtered_df["Status"].str.lower().isin(["sold", "closed won"])]["Total Value (£)"].sum()
+    
+    fcol1, fcol2 = st.columns(2)
+    fcol1.metric("Total Pipeline Value", f"£{total_pipeline:,.2f}")
+    fcol2.metric("Won Revenue", f"£{sold_val:,.2f}")
 
 st.divider()
 
@@ -213,38 +215,41 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📅 Pipeline Schedule",
     "🏆 Consultant Leaderboard",
     "🗓️ Calendar View",
-    "📋 Master Data View",
+    "📋 Stage Breakdown Summary",
 ])
 
 with tab1:
-    st.subheader(
-        f"Active Sales Pipeline & Appointments ({timeframe_option})"
-    )
+    st.subheader(f"Active Sales Diary & Status ({timeframe_option})")
     if filtered_df.empty:
         st.info("No records found matching your selected timeframe and filters.")
     else:
         display_df = filtered_df.sort_values(by="Parsed Date", ascending=True).copy()
-        display_df["Lease Value (£)"] = display_df["Lease Value (£)"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-        display_df["Services Value (£)"] = display_df["Services Value (£)"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-        display_df["Combined Value (£)"] = display_df["Combined Value (£)"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-
-        st.dataframe(
-            display_df[[
+        
+        cols_to_display = [
+            "Appointment Date",
+            "Client Name",
+            "Sales Rep",
+            "Status",
+            "Notes",
+        ]
+        
+        if show_financials:
+            display_df["Lease Value (£)"] = display_df["Lease Value (£)"].apply(lambda x: f"£{x:,.2f}")
+            display_df["Services Value (£)"] = display_df["Services Value (£)"].apply(lambda x: f"£{x:,.2f}")
+            display_df["Total Value (£)"] = display_df["Total Value (£)"].apply(lambda x: f"£{x:,.2f}")
+            cols_to_display = [
                 "Appointment Date",
                 "Client Name",
                 "Sales Rep",
                 "Lease Value (£)",
                 "Services Value (£)",
-                "Combined Value (£)",
+                "Total Value (£)",
                 "Status",
                 "Notes",
-            ]],
+            ]
+
+        st.dataframe(
+            display_df[cols_to_display],
             use_container_width=True,
             hide_index=True,
         )
@@ -256,32 +261,12 @@ with tab2:
             time_filtered_df.groupby("Sales Rep")
             .agg(
                 Total_Deals=("Client Name", "count"),
-                Lease_Total=("Lease Value (£)", "sum"),
-                Services_Total=("Services Value (£)", "sum"),
-                Combined_Pipeline=("Total Value (£)", "sum"),
-                Won_Value=(
-                    "Total Value (£)",
-                    lambda x: x[
-                        time_filtered_df.loc[x.index, "Status"].str.lower()
-                        == "sold"
-                    ].sum(),
-                ),
+                Deals_Won=("Status", lambda x: sum(x.str.lower().isin(["sold", "closed won"]))),
+                Deals_In_Progress=("Status", lambda x: sum(x.str.lower().isin(["create proposal", "send for signature", "negotiations", "on-hold"]))),
+                Deals_Booked=("Status", lambda x: sum(x.str.lower().isin(["meeting booked", "booked", "2nd dem", "pending"]))),
             )
             .reset_index()
         )
-        rep_summary["Lease_Total"] = rep_summary["Lease_Total"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-        rep_summary["Services_Total"] = rep_summary["Services_Total"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-        rep_summary["Combined_Pipeline"] = rep_summary["Combined_Pipeline"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-        rep_summary["Won_Value"] = rep_summary["Won_Value"].apply(
-            lambda x: f"£{x:,.2f}"
-        )
-
         st.dataframe(rep_summary, use_container_width=True, hide_index=True)
     else:
         st.info("Insufficient data for leaderboard metrics in this timeframe.")
@@ -291,24 +276,31 @@ with tab3:
 
     calendar_events = []
     status_colors = {
-        "Sold": "#28a745",  # Green
-        "Closed Won": "#28a745",  # Green
-        "Sat": "#17a2b8",  # Teal
-        "Booked": "#ffc107",  # Yellow/Orange
-        "Meeting Booked": "#ffc107",  # Yellow/Orange
-        "Not Sold": "#dc3545",  # Red
-        "Closed Lost": "#dc3545",  # Red
-        "Lost": "#dc3545",  # Red
+        "Sold": "#28a745",
+        "Closed Won": "#28a745",
+        "2nd Dem": "#17a2b8",
+        "Meeting Booked": "#ffc107",
+        "Booked": "#ffc107",
+        "Pending": "#6c757d",
+        "On-Hold": "#fd7e14",
+        "Create Proposal": "#6610f2",
+        "Send for Signature": "#007bff",
+        "Negotiations": "#20c997",
+        "Closed Lost": "#dc3545",
+        "Not Sold": "#dc3545",
     }
 
     for _, row in filtered_df.iterrows():
         if pd.notna(row["Parsed Date"]):
             status_str = str(row["Status"])
             color = status_colors.get(status_str, "#6c757d")
-            val_formatted = f"£{row['Total Value (£)']:,.0f}"
+            title_text = f"{row['Client Name']} - {status_str} [{row['Sales Rep']}]"
+            
+            if show_financials:
+                title_text = f"{row['Client Name']} (£{row['Total Value (£)']:,.0f}) - {status_str} [{row['Sales Rep']}]"
 
             calendar_events.append({
-                "title": f"{row['Client Name']} ({val_formatted}) - {status_str} [{row['Sales Rep']}]",
+                "title": title_text,
                 "start": row["Parsed Date"].strftime("%Y-%m-%d"),
                 "backgroundColor": color,
                 "borderColor": color,
@@ -333,14 +325,29 @@ with tab3:
         st.warning("Please include `streamlit-calendar` in your requirements.txt.")
 
 with tab4:
-    st.subheader("Raw Data Inspector")
-    raw_display = df.copy()
-    for col in [
-        "Lease Value (£)",
-        "Services Value (£)",
-        "Combined Value (£)",
-        "Total Value (£)",
-    ]:
-        if col in raw_display.columns:
-            raw_display[col] = raw_display[col].apply(lambda x: f"£{x:,.2f}")
-    st.dataframe(raw_display, use_container_width=True)
+    st.subheader("📊 Detailed Stage Volume Breakdown")
+    if not time_filtered_df.empty:
+        all_tracked_stages = [
+            "Meeting Booked",
+            "Booked",
+            "2nd Dem",
+            "Pending",
+            "Create Proposal",
+            "Send for Signature",
+            "Negotiations",
+            "On-Hold",
+            "Sold",
+            "Closed Won",
+            "Closed Lost",
+            "Not Sold"
+        ]
+        
+        stage_counts = []
+        for stage in all_tracked_stages:
+            count = len(time_filtered_df[time_filtered_df["Status"].str.lower() == stage.lower()])
+            stage_counts.append({"Stage / Status": stage, "Total Count": count})
+            
+        stage_df = pd.DataFrame(stage_counts)
+        st.dataframe(stage_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No data available for stage breakdown.")

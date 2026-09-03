@@ -1,8 +1,7 @@
 from datetime import datetime
-import gspread
 import pandas as pd
+import requests
 import streamlit as st
-from oauth2client.service_account import ServiceAccountCredentials
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -12,39 +11,113 @@ st.set_page_config(
 st.title("📊 SYComms Sales Command Center & Pipeline")
 
 
-# --- Data Connection & Loading ---
+# --- Zoho CRM Connection & Loading ---
+ZOHO_ACCOUNTS_URL = "https://accounts.zoho.eu/oauth/v2/token"
+ZOHO_API_DOMAIN = "https://www.zohoapis.eu"
+DEAL_FIELDS = "Deal_Name,Owner,Appt_Date_Time,Potential_Value,Services_Value,Stage,Closing_Date"
+
+
+@st.cache_data(ttl=270)  # Zoho access tokens last 1hr; refresh well before that
+def get_access_token():
+    try:
+        creds = st.secrets["zoho"]
+    except Exception as err:
+        raise RuntimeError(
+            f"Missing Zoho credentials in Streamlit secrets. Details: {err}"
+        )
+
+    try:
+        resp = requests.post(
+            ZOHO_ACCOUNTS_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": creds["client_id"],
+                "client_secret": creds["client_secret"],
+                "refresh_token": creds["refresh_token"],
+            },
+            timeout=15,
+        )
+        payload = resp.json()
+    except Exception as err:
+        raise RuntimeError(f"Could not reach Zoho accounts server. Details: {err}")
+
+    token = payload.get("access_token")
+    if not token:
+        raise RuntimeError(f"Zoho authentication failed: {payload}")
+    return token
+
+
 @st.cache_data(ttl=30)
 def load_data():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-    except Exception as auth_err:
-        raise RuntimeError(
-            f"Authentication Failed: Check your Streamlit secrets formatting. Details: {auth_err}"
+    token = get_access_token()
+    headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+
+    records = []
+    page = 1
+    while True:
+        try:
+            resp = requests.get(
+                f"{ZOHO_API_DOMAIN}/crm/v2/Deals",
+                headers=headers,
+                params={
+                    "fields": DEAL_FIELDS,
+                    "per_page": 200,
+                    "page": page,
+                    "sort_by": "Modified_Time",
+                    "sort_order": "desc",
+                },
+                timeout=20,
+            )
+        except Exception as err:
+            raise RuntimeError(f"Could not reach Zoho CRM API. Details: {err}")
+
+        if resp.status_code == 204:
+            break  # no data at all
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Zoho CRM API returned an error (status {resp.status_code}): {resp.text}"
+            )
+
+        payload = resp.json()
+        records.extend(payload.get("data", []))
+        info = payload.get("info", {})
+        if not info.get("more_records"):
+            break
+        page += 1
+
+    rows = []
+    for r in records:
+        owner = r.get("Owner") or {}
+        appt_raw = r.get("Appt_Date_Time")
+        appt_str = ""
+        if appt_raw:
+            try:
+                # Zoho returns ISO 8601 with timezone offset, e.g. 2026-09-10T14:00:00+01:00
+                dt = datetime.fromisoformat(appt_raw)
+                appt_str = dt.strftime("%d/%m/%Y %H:%M:%S")
+            except ValueError:
+                appt_str = appt_raw
+
+        rows.append(
+            {
+                "Client Name": r.get("Deal_Name") or "",
+                "Sales Rep": owner.get("name") or "Unassigned",
+                "Appointment Date": appt_str,
+                "Lease Value (£)": float(r.get("Potential_Value") or 0),
+                "Services Value (£)": float(r.get("Services_Value") or 0),
+                "Combined Value (£)": 0.0,
+                "Status": r.get("Stage") or "",
+                "Notes": "",
+            }
         )
 
-    try:
-        sheet = client.open("SYComms Sales Tracker Sheet").worksheet("Appointments")
-    except gspread.exceptions.SpreadsheetNotFound:
-        raise RuntimeError(
-            "Spreadsheet not found. Make sure you've shared the Google Sheet with your service_account email address!"
-        )
-    except Exception as sheet_err:
-        raise RuntimeError(f"Could not open worksheet. Details: {sheet_err}")
-
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+    return pd.DataFrame(rows)
 
 
 try:
     df = load_data()
 except Exception as e:
-    st.error(f"🚨 Google Sheets Connection Error: {e}")
+    st.error(f"🚨 Zoho CRM Connection Error: {e}")
     st.stop()
 
 # --- Data Cleaning & Prep ---
@@ -56,10 +129,14 @@ if not df.empty:
         "Combined Value (£)",
     ]:
         if col in df.columns:
-            df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(r"[^\d.]", "", regex=True),
-                errors="coerce",
-            ).fillna(0)
+            df[col] = (
+                pd.to_numeric(
+                    df[col].astype(str).str.replace(r"[^\d.]", "", regex=True),
+                    errors="coerce",
+                )
+                .fillna(0)
+                .astype(float)
+            )
         else:
             df[col] = 0.0
 

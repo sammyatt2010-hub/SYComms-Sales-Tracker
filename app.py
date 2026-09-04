@@ -271,7 +271,7 @@ lost_count = count_stages(["Closed Lost", "Not Sold", "Lost", "Unsuccessful"])
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Active Deals", f"{total_deals_count}")
-col2.metric("Early Appointments", f"{early_stages_count}")
+col2.metric("New / Booked Appointments", f"{early_stages_count}")
 col3.metric("In Progress / Closing", f"{active_closing_count}")
 col4.metric("Won / Closed", f"{won_count} Won ({lost_count} Lost)")
 
